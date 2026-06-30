@@ -1,0 +1,8 @@
+uputstvo/
+.venv/
+.env
+__pycache__/
+*.pyc
+outputs/v1_baseline_final/
+outputs/v2_build_generalized/
+outputs/v2_optimized/
