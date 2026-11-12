@@ -44,7 +44,7 @@ def clean_number(value):
         number = float(value)
     except (TypeError, ValueError):
         return None
-    if math.isnan(number):
+    if not math.isfinite(number):
         return None
     return number
 
@@ -207,7 +207,10 @@ def parse_args():
     parser.add_argument("--chunk-size", type=int, default=10000)
     parser.add_argument("--limit", type=int, default=None, help="Probni uvoz samo prvih N redova.")
     parser.add_argument("--drop", action="store_true", help="Obrisi V1 kolekcije pre uvoza.")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.chunk_size <= 0 or (args.limit is not None and args.limit <= 0):
+        parser.error("Chunk size and an optional row limit must be positive.")
+    return args
 
 
 def main():
@@ -215,43 +218,45 @@ def main():
     args = parse_args()
 
     csv_path = Path(
-        args.csv or os.getenv("CSV_PATH", "uputstvo/tripadvisor_european_restaurants.csv")
+        args.csv or os.getenv("CSV_PATH", "data/tripadvisor_european_restaurants.csv")
     )
     mongo_uri = args.uri or os.getenv("MONGODB_URI", "mongodb://localhost:27017")
-    db_name = args.db or os.getenv("MONGODB_DB", "tripadvisor_restaurants")
+    db_name = args.db or os.getenv("MONGODB_DB", "restaurant_analytics")
 
     if not csv_path.exists():
         raise FileNotFoundError(f"CSV fajl nije pronadjen: {csv_path}")
 
-    client = MongoClient(mongo_uri)
-    client.admin.command("ping")
-    db = client[db_name]
+    if "restaurant_link" not in pd.read_csv(csv_path, nrows=0).columns:
+        raise ValueError("CSV must contain the restaurant_link identifier column.")
+    with MongoClient(mongo_uri, serverSelectionTimeoutMS=5000) as client:
+        client.admin.command("ping")
+        db = client[db_name]
+        if not args.drop and any(db[name].estimated_document_count() for name in V1_COLLECTIONS):
+            raise ValueError("V1 already contains data. Choose an empty database or use --drop to replace V1.")
+        if args.drop:
+            for collection_name in V1_COLLECTIONS:
+                db[collection_name].drop()
 
-    if args.drop:
-        for collection_name in V1_COLLECTIONS:
-            db[collection_name].drop()
+        total_rows = 0
+        inserted_rows = 0
+        with pd.read_csv(csv_path, chunksize=args.chunk_size, low_memory=False) as reader:
+            with tqdm(desc="Importing V1", unit="rows") as progress:
+                for chunk in reader:
+                    if args.limit is not None:
+                        remaining = args.limit - total_rows
+                        if remaining <= 0:
+                            break
+                        chunk = chunk.head(remaining)
+                    rows = chunk.to_dict("records")
+                    inserted_rows += insert_batch(db, rows)
+                    total_rows += len(rows)
+                    progress.update(len(rows))
 
-    total_rows = 0
-    reader = pd.read_csv(csv_path, chunksize=args.chunk_size, low_memory=False)
-
-    with tqdm(desc="Uvoz V1 seme", unit="redova") as progress:
-        for chunk in reader:
-            if args.limit is not None:
-                remaining = args.limit - total_rows
-                if remaining <= 0:
-                    break
-                chunk = chunk.head(remaining)
-
-            rows = chunk.to_dict("records")
-            insert_batch(db, rows)
-            total_rows += len(rows)
-            progress.update(len(rows))
-
-    print(f"Uvezeno redova: {total_rows}")
-    print(f"Baza: {db_name}")
-    print("Kolekcije:")
-    for collection_name in V1_COLLECTIONS:
-        print(f"- {collection_name}: {db[collection_name].estimated_document_count()}")
+        print(f"Processed rows: {total_rows}; imported: {inserted_rows}; skipped without an ID: {total_rows - inserted_rows}")
+        print(f"Database: {db_name}")
+        for name in V1_COLLECTIONS:
+            print(f"- {name}: {db[name].estimated_document_count()}")
+        print("Rebuild V2 after importing or replacing source data.")
 
 
 if __name__ == "__main__":

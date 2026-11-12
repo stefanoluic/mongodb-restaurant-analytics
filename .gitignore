@@ -1,8 +1,16 @@
 uputstvo/
 .venv/
 .env
+.env.*
+!.env.example
+data/
+.local-run/
+*.log
 __pycache__/
 *.pyc
 outputs/v1_baseline_final/
+outputs/v1_baseline/
 outputs/v2_build_generalized/
 outputs/v2_optimized/
+outputs/runs/
+outputs/query_result_charts/

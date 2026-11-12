@@ -1,6 +1,9 @@
 import argparse
+import json
 import os
 import time
+from datetime import datetime, timezone
+from pathlib import Path
 
 from dotenv import load_dotenv
 from pymongo import ASCENDING, DESCENDING, MongoClient
@@ -18,6 +21,10 @@ V2_COLLECTIONS = [
 
 def key(*parts):
     return "||".join(str(part) for part in parts)
+
+
+def average_where(field, predicate):
+    return {"$avg": {"$cond": [predicate, field, None]}}
 
 
 def empty_city_doc(country, city):
@@ -644,6 +651,7 @@ def build_city_cuisine_stats(db):
 
 def build_classification_signal_stats(db):
     docs = []
+    successful = {"$and": [{"$gte": ["$avg_rating", 4.5]}, {"$gte": ["$total_reviews_count", 100]}]}
 
     feature_pipeline = [
         {
@@ -691,9 +699,16 @@ def build_classification_signal_stats(db):
                 "avg_reviews": {"$avg": "$total_reviews_count"},
                 "avg_value_rating": {"$avg": "$category_ratings.value"},
                 "cities": {"$addToSet": "$location.city"},
+                "successful_avg_rating": average_where("$avg_rating", successful),
+                "successful_avg_reviews": average_where("$total_reviews_count", successful),
+                "successful_avg_value_rating": average_where("$category_ratings.value", successful),
+                "successful_cities": {"$addToSet": {"$cond": [successful, "$location.city", None]}},
             }
         },
-        {"$addFields": {"city_count": {"$size": "$cities"}}},
+        {"$addFields": {
+            "city_count": {"$size": "$cities"},
+            "successful_city_count": {"$size": {"$setDifference": ["$successful_cities", [None]]}},
+        }},
     ]
     for item in run_aggregation(
         db, "restaurant_ratings", feature_pipeline, "classification_signal_stats q08"
@@ -712,6 +727,10 @@ def build_classification_signal_stats(db):
                 "avg_reviews": item["avg_reviews"],
                 "avg_value_rating": item.get("avg_value_rating"),
                 "city_count": item["city_count"],
+                "successful_avg_rating": item["successful_avg_rating"],
+                "successful_avg_reviews": item["successful_avg_reviews"],
+                "successful_avg_value_rating": item["successful_avg_value_rating"],
+                "successful_city_count": item["successful_city_count"],
             }
         )
 
@@ -774,6 +793,9 @@ def build_classification_signal_stats(db):
                 "avg_rating": {"$avg": "$avg_rating"},
                 "avg_reviews": {"$avg": "$total_reviews_count"},
                 "avg_price_score": {"$avg": "$restaurant.price_score"},
+                "successful_avg_rating": average_where("$avg_rating", successful),
+                "successful_avg_reviews": average_where("$total_reviews_count", successful),
+                "successful_avg_price_score": average_where("$restaurant.price_score", successful),
             }
         },
     ]
@@ -795,6 +817,9 @@ def build_classification_signal_stats(db):
                 "avg_rating": item["avg_rating"],
                 "avg_reviews": item["avg_reviews"],
                 "avg_price_score": item.get("avg_price_score"),
+                "successful_avg_rating": item["successful_avg_rating"],
+                "successful_avg_reviews": item["successful_avg_reviews"],
+                "successful_avg_price_score": item["successful_avg_price_score"],
             }
         )
 
@@ -807,6 +832,7 @@ def build_classification_signal_stats(db):
 
 
 def build_cuisine_quality_stats(db):
+    qualified = {"$and": [{"$gte": ["$total_reviews_count", 100]}, {"$ne": ["$review_distribution.excellent", None]}]}
     pipeline = [
         {
             "$lookup": {
@@ -877,6 +903,9 @@ def build_cuisine_quality_stats(db):
                 "avg_rating": {"$avg": "$avg_rating"},
                 "avg_reviews": {"$avg": "$total_reviews_count"},
                 "avg_excellent_ratio": {"$avg": "$excellent_ratio"},
+                "qualified_avg_rating": average_where("$avg_rating", qualified),
+                "qualified_avg_reviews": average_where("$total_reviews_count", qualified),
+                "qualified_avg_excellent_ratio": average_where("$excellent_ratio", qualified),
             }
         },
         {
@@ -890,6 +919,9 @@ def build_cuisine_quality_stats(db):
                 "avg_rating": 1,
                 "avg_reviews": 1,
                 "avg_excellent_ratio": 1,
+                "qualified_avg_rating": 1,
+                "qualified_avg_reviews": 1,
+                "qualified_avg_excellent_ratio": 1,
             }
         },
     ]
@@ -906,6 +938,8 @@ def create_indexes(db):
         [
             ("diet_friendly_high_rated_count", DESCENDING),
             ("diet_friendly_avg_rating", DESCENDING),
+            ("country", ASCENDING),
+            ("city", ASCENDING),
         ],
         name="q01_diet_city_rank",
     )
@@ -913,6 +947,8 @@ def create_indexes(db):
         [
             ("gluten_free_high_rated_count", DESCENDING),
             ("gluten_free_avg_rating", DESCENDING),
+            ("country", ASCENDING),
+            ("city", ASCENDING),
         ],
         name="q02_gluten_city_rank",
     )
@@ -920,6 +956,8 @@ def create_indexes(db):
         [
             ("avg_value_for_money", DESCENDING),
             ("affordable_lunch_dinner_count", DESCENDING),
+            ("country", ASCENDING),
+            ("city", ASCENDING),
         ],
         name="q03_value_city_rank",
     )
@@ -928,6 +966,8 @@ def create_indexes(db):
             ("expensive_avg_gap", DESCENDING),
             ("expensive_avg_value", ASCENDING),
             ("expensive_food_service_gap_count", DESCENDING),
+            ("country", ASCENDING),
+            ("city", ASCENDING),
         ],
         name="q04_gap_city_rank",
     )
@@ -936,6 +976,8 @@ def create_indexes(db):
             ("quality_demand_count", DESCENDING),
             ("premium_share", ASCENDING),
             ("premium_avg_rating", DESCENDING),
+            ("country", ASCENDING),
+            ("city", ASCENDING),
         ],
         name="q07_premium_city_rank",
     )
@@ -943,6 +985,9 @@ def create_indexes(db):
         [
             ("tourism_restaurant_count", DESCENDING),
             ("tourism_avg_rating", DESCENDING),
+            ("country", ASCENDING),
+            ("city", ASCENDING),
+            ("cuisine", ASCENDING),
         ],
         name="q05_city_cuisine_rank",
     )
@@ -950,6 +995,9 @@ def create_indexes(db):
         [
             ("investor_avg_rating", DESCENDING),
             ("investor_avg_reviews", DESCENDING),
+            ("country", ASCENDING),
+            ("city", ASCENDING),
+            ("cuisine", ASCENDING),
         ],
         name="q06_underrepresented_rank",
     )
@@ -958,27 +1006,55 @@ def create_indexes(db):
             ("signal_type", ASCENDING),
             ("scope", ASCENDING),
             ("successful_restaurant_count", DESCENDING),
-            ("avg_rating", DESCENDING),
+            ("successful_avg_rating", DESCENDING),
+            ("signal_value", ASCENDING),
         ],
         name="q08_signal_feature_rank",
     )
     db.classification_signal_stats.create_index(
         [
             ("signal_type", ASCENDING),
-            ("price_segment", ASCENDING),
             ("successful_restaurant_count", DESCENDING),
-            ("avg_rating", DESCENDING),
+            ("successful_avg_rating", DESCENDING),
+            ("signal_value", ASCENDING),
+            ("price_segment", ASCENDING),
         ],
         name="q09_signal_tag_price_rank",
     )
     db.cuisine_quality_stats.create_index(
         [
-            ("avg_excellent_ratio", DESCENDING),
+            ("qualified_avg_excellent_ratio", DESCENDING),
             ("restaurant_count", DESCENDING),
+            ("cuisine", ASCENDING),
         ],
         name="q10_cuisine_quality_rank",
     )
     print("V2 indeksi kreirani")
+
+
+def build_all(db, *, replace=False, skip_indexes=False):
+    existing = [name for name in V2_COLLECTIONS if db[name].estimated_document_count()]
+    if existing and not replace:
+        raise ValueError("V2 collections already contain data. Use --replace to rebuild derived collections only.")
+    source_names = ("restaurants", "restaurant_locations", "restaurant_ratings", "restaurant_classifications")
+    source_counts = {name: db[name].count_documents({}) for name in source_names}
+    if not source_counts["restaurants"] or len(set(source_counts.values())) != 1:
+        raise ValueError("Import a complete V1 dataset before building V2; all four source counts must match.")
+    started_at = datetime.now(timezone.utc).isoformat()
+    started = time.perf_counter()
+    build_city_offer_stats(db)
+    build_city_cuisine_stats(db)
+    build_classification_signal_stats(db)
+    build_cuisine_quality_stats(db)
+    if not skip_indexes:
+        create_indexes(db)
+    elapsed = time.perf_counter() - started
+    return {
+        "schema_version": 2, "started_at": started_at, "database": db.name,
+        "build_seconds": elapsed, "includes_indexes": not skip_indexes,
+        "source_counts": source_counts,
+        "materialized_counts": {name: db[name].count_documents({}) for name in V2_COLLECTIONS},
+    }
 
 
 def parse_args():
@@ -986,6 +1062,8 @@ def parse_args():
     parser.add_argument("--uri", default=None, help="MongoDB konekcioni string.")
     parser.add_argument("--db", default=None, help="Naziv MongoDB baze.")
     parser.add_argument("--skip-indexes", action="store_true")
+    parser.add_argument("--replace", action="store_true", help="Replace existing derived V2 collections; V1 is preserved.")
+    parser.add_argument("--report", default="outputs/runs/build.json", help="Save build time and collection counts.")
     return parser.parse_args()
 
 
@@ -994,28 +1072,15 @@ def main():
     args = parse_args()
 
     mongo_uri = args.uri or os.getenv("MONGODB_URI", "mongodb://localhost:27017")
-    db_name = args.db or os.getenv("MONGODB_DB", "tripadvisor_restaurants")
+    db_name = args.db or os.getenv("MONGODB_DB", "restaurant_analytics")
 
-    client = MongoClient(mongo_uri)
-    client.admin.command("ping")
-    db = client[db_name]
-
-    started = time.perf_counter()
-    for collection_name in V2_COLLECTIONS:
-        db[collection_name].drop()
-
-    build_city_offer_stats(db)
-    build_city_cuisine_stats(db)
-    build_classification_signal_stats(db)
-    build_cuisine_quality_stats(db)
-
-    if not args.skip_indexes:
-        create_indexes(db)
-
-    elapsed = round(time.perf_counter() - started, 2)
-    print(f"V2 sema izgradjena za {elapsed} s")
-    for collection_name in V2_COLLECTIONS:
-        print(f"- {collection_name}: {db[collection_name].estimated_document_count()}")
+    with MongoClient(mongo_uri, serverSelectionTimeoutMS=5000) as client:
+        client.admin.command("ping")
+        report = build_all(client[db_name], replace=args.replace, skip_indexes=args.skip_indexes)
+    path = Path(args.report)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+    print(f"V2 built in {report['build_seconds']:.3f} s; report: {path}")
 
 
 if __name__ == "__main__":

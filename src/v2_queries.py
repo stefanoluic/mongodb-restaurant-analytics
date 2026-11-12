@@ -1,12 +1,11 @@
 import argparse
-import json
 import os
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
 from pymongo import MongoClient
+from query_runtime import explain_query, run_query, write_json
 
 
 V2_QUERIES = [
@@ -20,7 +19,7 @@ V2_QUERIES = [
         "collection": "city_offer_stats",
         "pipeline": [
             {"$match": {"diet_friendly_high_rated_count": {"$gte": 10}}},
-            {"$sort": {"diet_friendly_high_rated_count": -1, "diet_friendly_avg_rating": -1}},
+            {"$sort": {"diet_friendly_high_rated_count": -1, "diet_friendly_avg_rating": -1, "country": 1, "city": 1}},
             {"$limit": 20},
             {
                 "$project": {
@@ -44,7 +43,7 @@ V2_QUERIES = [
         "collection": "city_offer_stats",
         "pipeline": [
             {"$match": {"gluten_free_high_rated_count": {"$gte": 5}}},
-            {"$sort": {"gluten_free_high_rated_count": -1, "gluten_free_avg_rating": -1}},
+            {"$sort": {"gluten_free_high_rated_count": -1, "gluten_free_avg_rating": -1, "country": 1, "city": 1}},
             {"$limit": 20},
             {
                 "$project": {
@@ -68,7 +67,7 @@ V2_QUERIES = [
         "collection": "city_offer_stats",
         "pipeline": [
             {"$match": {"affordable_lunch_dinner_count": {"$gte": 10}}},
-            {"$sort": {"avg_value_for_money": -1, "affordable_lunch_dinner_count": -1}},
+            {"$sort": {"avg_value_for_money": -1, "affordable_lunch_dinner_count": -1, "country": 1, "city": 1}},
             {"$limit": 20},
             {
                 "$project": {
@@ -101,11 +100,7 @@ V2_QUERIES = [
                 }
             },
             {
-                "$sort": {
-                    "expensive_avg_gap": -1,
-                    "expensive_avg_value": 1,
-                    "expensive_food_service_gap_count": -1,
-                }
+                "$sort": {"expensive_avg_gap": -1, "expensive_avg_value": 1, "expensive_food_service_gap_count": -1, "country": 1, "city": 1}
             },
             {"$limit": 20},
             {
@@ -134,7 +129,7 @@ V2_QUERIES = [
         "collection": "city_cuisine_stats",
         "pipeline": [
             {"$match": {"tourism_restaurant_count": {"$gte": 20}}},
-            {"$sort": {"tourism_restaurant_count": -1, "tourism_avg_rating": -1}},
+            {"$sort": {"tourism_restaurant_count": -1, "tourism_avg_rating": -1, "country": 1, "city": 1, "cuisine": 1}},
             {"$limit": 30},
             {
                 "$project": {
@@ -164,7 +159,7 @@ V2_QUERIES = [
                     "investor_avg_rating": {"$gte": 4.2},
                 }
             },
-            {"$sort": {"investor_avg_rating": -1, "investor_avg_reviews": -1}},
+            {"$sort": {"investor_avg_rating": -1, "investor_avg_reviews": -1, "country": 1, "city": 1, "cuisine": 1}},
             {"$limit": 30},
             {
                 "$project": {
@@ -195,7 +190,7 @@ V2_QUERIES = [
                     "premium_share": {"$lte": 0.08},
                 }
             },
-            {"$sort": {"quality_demand_count": -1, "premium_share": 1, "premium_avg_rating": -1}},
+            {"$sort": {"quality_demand_count": -1, "premium_share": 1, "premium_avg_rating": -1, "country": 1, "city": 1}},
             {"$limit": 20},
             {
                 "$project": {
@@ -229,17 +224,17 @@ V2_QUERIES = [
                     "successful_restaurant_count": {"$gte": 20},
                 }
             },
-            {"$sort": {"successful_restaurant_count": -1, "avg_rating": -1}},
+            {"$sort": {"successful_restaurant_count": -1, "successful_avg_rating": -1, "signal_value": 1}},
             {"$limit": 25},
             {
                 "$project": {
                     "_id": 0,
                     "feature": "$signal_value",
                     "successful_restaurant_count": 1,
-                    "avg_rating": {"$round": ["$avg_rating", 2]},
-                    "avg_reviews": {"$round": ["$avg_reviews", 1]},
-                    "avg_value_rating": {"$round": ["$avg_value_rating", 2]},
-                    "city_count": 1,
+                    "avg_rating": {"$round": ["$successful_avg_rating", 2]},
+                    "avg_reviews": {"$round": ["$successful_avg_reviews", 1]},
+                    "avg_value_rating": {"$round": ["$successful_avg_value_rating", 2]},
+                    "city_count": "$successful_city_count",
                 }
             },
         ],
@@ -259,7 +254,7 @@ V2_QUERIES = [
                     "successful_restaurant_count": {"$gte": 50},
                 }
             },
-            {"$sort": {"successful_restaurant_count": -1, "avg_rating": -1}},
+            {"$sort": {"successful_restaurant_count": -1, "successful_avg_rating": -1, "signal_value": 1, "price_segment": 1}},
             {"$limit": 25},
             {
                 "$project": {
@@ -267,9 +262,9 @@ V2_QUERIES = [
                     "tag": "$signal_value",
                     "price_segment": 1,
                     "successful_restaurant_count": 1,
-                    "avg_rating": {"$round": ["$avg_rating", 2]},
-                    "avg_reviews": {"$round": ["$avg_reviews", 1]},
-                    "avg_price_score": {"$round": ["$avg_price_score", 2]},
+                    "avg_rating": {"$round": ["$successful_avg_rating", 2]},
+                    "avg_reviews": {"$round": ["$successful_avg_reviews", 1]},
+                    "avg_price_score": {"$round": ["$successful_avg_price_score", 2]},
                 }
             },
         ],
@@ -281,16 +276,16 @@ V2_QUERIES = [
         "collection": "cuisine_quality_stats",
         "pipeline": [
             {"$match": {"restaurant_count": {"$gte": 100}}},
-            {"$sort": {"avg_excellent_ratio": -1, "restaurant_count": -1}},
+            {"$sort": {"qualified_avg_excellent_ratio": -1, "restaurant_count": -1, "cuisine": 1}},
             {"$limit": 25},
             {
                 "$project": {
                     "_id": 0,
                     "cuisine": 1,
                     "restaurant_count": 1,
-                    "avg_rating": {"$round": ["$avg_rating", 2]},
-                    "avg_reviews": {"$round": ["$avg_reviews", 1]},
-                    "avg_excellent_ratio": {"$round": ["$avg_excellent_ratio", 4]},
+                    "avg_rating": {"$round": ["$qualified_avg_rating", 2]},
+                    "avg_reviews": {"$round": ["$qualified_avg_reviews", 1]},
+                    "avg_excellent_ratio": {"$round": ["$qualified_avg_excellent_ratio", 4]},
                 }
             },
         ],
@@ -309,82 +304,6 @@ def selected_queries(query_id):
     if query_id == "all":
         return V2_QUERIES
     return [get_query(query_id)]
-
-
-def collect_explain_summary(explain):
-    summary = {
-        "indexes_used": set(),
-        "collection_scans": 0,
-        "total_docs_examined_reported": 0,
-        "total_keys_examined_reported": 0,
-    }
-
-    def walk(value):
-        if isinstance(value, dict):
-            stage = value.get("stage")
-            if stage == "COLLSCAN":
-                summary["collection_scans"] += 1
-
-            index_name = value.get("indexName")
-            if index_name:
-                summary["indexes_used"].add(index_name)
-
-            indexes_used = value.get("indexesUsed")
-            if isinstance(indexes_used, list):
-                for index in indexes_used:
-                    summary["indexes_used"].add(str(index))
-
-            docs_examined = value.get("totalDocsExamined")
-            if isinstance(docs_examined, (int, float)):
-                summary["total_docs_examined_reported"] += docs_examined
-
-            keys_examined = value.get("totalKeysExamined")
-            if isinstance(keys_examined, (int, float)):
-                summary["total_keys_examined_reported"] += keys_examined
-
-            collection_scans = value.get("collectionScans")
-            if isinstance(collection_scans, (int, float)):
-                summary["collection_scans"] += collection_scans
-
-            for nested in value.values():
-                walk(nested)
-        elif isinstance(value, list):
-            for item in value:
-                walk(item)
-
-    walk(explain)
-    summary["indexes_used"] = sorted(summary["indexes_used"])
-    return summary
-
-
-def json_default(value):
-    if isinstance(value, datetime):
-        return value.isoformat()
-    return str(value)
-
-
-def write_json(path, data):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as file:
-        json.dump(data, file, ensure_ascii=False, indent=2, default=json_default)
-
-
-def run_query(db, query):
-    started = time.perf_counter()
-    results = list(db[query["collection"]].aggregate(query["pipeline"], allowDiskUse=True))
-    elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
-    return results, elapsed_ms
-
-
-def explain_query(db, query):
-    command = {
-        "aggregate": query["collection"],
-        "pipeline": query["pipeline"],
-        "cursor": {},
-        "allowDiskUse": True,
-    }
-    explain = db.command("explain", command, verbosity="executionStats")
-    return explain, collect_explain_summary(explain)
 
 
 def parse_args():
@@ -412,10 +331,10 @@ def main():
     args = parse_args()
 
     mongo_uri = args.uri or os.getenv("MONGODB_URI", "mongodb://localhost:27017")
-    db_name = args.db or os.getenv("MONGODB_DB", "tripadvisor_restaurants")
+    db_name = args.db or os.getenv("MONGODB_DB", "restaurant_analytics")
     output_dir = Path(args.output_dir)
 
-    client = MongoClient(mongo_uri)
+    client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
     client.admin.command("ping")
     db = client[db_name]
 
@@ -448,7 +367,7 @@ def main():
             explain, explain_summary = explain_query(db, query)
             query_summary["explain_summary"] = explain_summary
             print(f"Indeksi: {explain_summary['indexes_used']}")
-            print(f"COLLSCAN broj: {explain_summary['collection_scans']}")
+            print(f"Executed collection-scan stages: {explain_summary['collection_scans']}")
             print(
                 "Prijavljeno pregledanih dokumenata: "
                 f"{explain_summary['total_docs_examined_reported']}"

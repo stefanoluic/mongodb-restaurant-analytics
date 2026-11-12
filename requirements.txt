@@ -1,5 +1,5 @@
-pandas
-pymongo
-python-dotenv
-tqdm
-matplotlib
+pandas==2.2.3
+pymongo==4.17.0
+python-dotenv==1.2.2
+tqdm==4.67.1
+matplotlib==3.9.2

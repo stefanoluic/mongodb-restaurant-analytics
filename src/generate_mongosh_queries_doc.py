@@ -5,7 +5,7 @@ from v1_queries import V1_QUERIES
 from v2_queries import V2_QUERIES
 
 
-OUTPUT_PATH = Path("docs/upiti_mongosh_sintaksa.md")
+OUTPUT_DIR = Path("queries")
 
 
 def to_mongosh(value, indent=0):
@@ -66,9 +66,9 @@ def write_section(lines, title, queries):
     for query in queries:
         lines.append(f"### {query['id']} - {query['question']}")
         lines.append("")
-        lines.append(f"Uloga: {query['role']}")
+        lines.append(f"Role: {query['role']}")
         lines.append("")
-        lines.append(f"Kolekcija: `{query['collection']}`")
+        lines.append(f"Collection: `{query['collection']}`")
         lines.append("")
         lines.append("```js")
         lines.append(query_block(query))
@@ -77,28 +77,15 @@ def write_section(lines, title, queries):
 
 
 def main():
-    lines = [
-        "# Upiti u MongoDB / mongosh sintaksi",
-        "",
-        "Ovaj dokument sadrzi iste upite koji se koriste u Python skriptama, ali",
-        "prepisane u oblik pogodan za Studio 3T IntelliShell, `mongosh` ili MongoDB",
-        "Compass aggregation editor.",
-        "",
-        "Python je koriscen za automatizaciju merenja, ali logika upita je MongoDB",
-        "aggregation pipeline.",
-        "",
-        "Napomena: upiti su dugi jer su u V1 semi podaci rasporedjeni u vise",
-        "kolekcija, pa se koriste `$lookup`, `$unwind`, `$group` i druga agregaciona",
-        "stanja.",
-        "",
-    ]
-
-    write_section(lines, "V1 upiti", V1_QUERIES)
-    write_section(lines, "V2 upiti", V2_QUERIES)
-
-    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    OUTPUT_PATH.write_text("\n".join(lines), encoding="utf-8")
-    print(f"Generisan dokument: {OUTPUT_PATH}")
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    for version, queries in (("v1", V1_QUERIES), ("v2", V2_QUERIES)):
+        lines = [f"# {version.upper()} aggregation pipelines", "",
+                 "Generated from the Python query definitions. Run with mongosh against the imported database.",
+                 "Query questions retain the original Serbian wording.", ""]
+        write_section(lines, "Queries", queries)
+        path = OUTPUT_DIR / f"{version}.md"
+        path.write_text("\n".join(lines), encoding="utf-8")
+        print(f"Generated: {path}")
 
 
 if __name__ == "__main__":

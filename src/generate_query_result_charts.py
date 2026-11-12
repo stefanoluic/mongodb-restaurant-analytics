@@ -1,8 +1,10 @@
 import argparse
-import json
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+
+from generate_performance_charts import load_report, load_results
+from v1_queries import V1_QUERIES
 
 
 QUERY_VISUALS = {
@@ -69,11 +71,6 @@ QUERY_VISUALS = {
 }
 
 
-def read_json(path):
-    with path.open("r", encoding="utf-8") as file:
-        return json.load(file)
-
-
 def category_label(row, fields):
     values = []
     for field in fields:
@@ -103,11 +100,9 @@ def autolabel(ax, bars):
         )
 
 
-def plot_query_result(input_file, schema_label, output_file):
-    payload = read_json(input_file)
-    query_id = payload["query"]["id"]
+def plot_query_result(query, rows, output_file):
+    query_id = query["id"]
     visual = QUERY_VISUALS[query_id]
-    rows = payload["results"]
 
     metric = visual["metric"]
     rows = [row for row in rows if row.get(metric) is not None]
@@ -119,7 +114,7 @@ def plot_query_result(input_file, schema_label, output_file):
     positions = list(range(len(rows)))
     bars = ax.barh(positions, values, color="#3d7f8f")
 
-    ax.set_title(f"{query_id.upper()} - {visual['title']} ({schema_label})")
+    ax.set_title(f"{query_id.upper()} - {visual['title']} (V1/V2 validated)")
     ax.set_xlabel(visual["ylabel"])
     ax.set_yticks(positions)
     ax.set_yticklabels(labels, fontsize=8)
@@ -127,7 +122,7 @@ def plot_query_result(input_file, schema_label, output_file):
     ax.grid(axis="x", alpha=0.25)
     autolabel(ax, bars)
 
-    question = payload["query"]["question"]
+    question = query["question"]
     fig.text(0.01, 0.01, question, fontsize=8, color="#555555")
     fig.tight_layout(rect=(0, 0.04, 1, 1))
     fig.savefig(output_file, dpi=180)
@@ -136,8 +131,7 @@ def plot_query_result(input_file, schema_label, output_file):
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Generisanje grafika rezultata upita.")
-    parser.add_argument("--v1-dir", default="outputs/v1_baseline_final")
-    parser.add_argument("--v2-dir", default="outputs/v2_optimized")
+    parser.add_argument("--benchmark-dir", type=Path, default=Path("outputs/runs/benchmark"))
     parser.add_argument("--output-dir", default="outputs/query_result_charts")
     return parser.parse_args()
 
@@ -147,15 +141,13 @@ def main():
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    report = load_report(args.benchmark_dir / "report.json")
+    results = load_results(report, args.benchmark_dir / "results")
     generated = []
-    for query_id in sorted(QUERY_VISUALS):
-        for schema_prefix, schema_label, base_dir in [
-            ("v1", "V1 baseline", Path(args.v1_dir)),
-            ("v2", "V2 optimizovana", Path(args.v2_dir)),
-        ]:
-            input_file = base_dir / "results" / f"{query_id}.json"
-            output_file = output_dir / f"{schema_prefix}_{query_id}_rezultat.png"
-            plot_query_result(input_file, schema_label, output_file)
+    for query in V1_QUERIES:
+        if query["id"] in results:
+            output_file = output_dir / f"{query['id']}.png"
+            plot_query_result(query, results[query["id"]], output_file)
             generated.append(output_file)
 
     print("Generisani grafici rezultata:")
